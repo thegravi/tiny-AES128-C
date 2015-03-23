@@ -73,7 +73,7 @@ static const uint8_t* Key;
 
 #if defined(CBC) && CBC
   // Initial Vector used only for CBC mode
-  static uint8_t* Iv;
+  static uint8_t Iv[KEYLEN];
 #endif
 
 // The lookup-tables are marked const so they can be placed in read-only storage instead of RAM
@@ -155,67 +155,45 @@ static uint8_t getSBoxInvert(uint8_t num)
 // This function produces Nb(Nr+1) round keys. The round keys are used in each round to decrypt the states. 
 static void KeyExpansion(void)
 {
-  uint32_t i, j, k;
+  uint32_t i, j;
   uint8_t tempa[4]; // Used for the column/row operations
-  
+
   // The first round key is the key itself.
-  for(i = 0; i < Nk; ++i)
-  {
-    RoundKey[(i * 4) + 0] = Key[(i * 4) + 0];
-    RoundKey[(i * 4) + 1] = Key[(i * 4) + 1];
-    RoundKey[(i * 4) + 2] = Key[(i * 4) + 2];
-    RoundKey[(i * 4) + 3] = Key[(i * 4) + 3];
-  }
+  memcpy(RoundKey, Key, 16);
+  i = 4;
 
   // All other round keys are found from the previous round keys.
-  for(; (i < (Nb * (Nr + 1))); ++i)
-  {
-    for(j = 0; j < 4; ++j)
+    for(; i < 44; ++i) // total of 11 keys
     {
-      tempa[j]=RoundKey[(i-1) * 4 + j];
+        for(j = 0; j < 4; ++j)
+            tempa[j] = RoundKey[((i-1)/4*16) + ((i-1)%4) + 4*j];
+//            tempa[j] = RoundKey[(i-1) + 4*j];
+
+        if (i % 4 == 0)
+        {
+          // This function rotates the 4 bytes in a word to the left once.
+          // [a0,a1,a2,a3] becomes [a1,a2,a3,a0]
+            uint8_t k = tempa[0];
+            tempa[0] = tempa[1];
+            tempa[1] = tempa[2];
+            tempa[2] = tempa[3];
+            tempa[3] = k;
+
+          // SubWord() is a function that takes a four-byte input word and
+          // applies the S-box to each of the four bytes to produce an output word.
+            tempa[0] = getSBoxValue(tempa[0]);
+            tempa[1] = getSBoxValue(tempa[1]);
+            tempa[2] = getSBoxValue(tempa[2]);
+            tempa[3] = getSBoxValue(tempa[3]);
+
+            tempa[0] ^= Rcon[i/4];
+        }
+
+        RoundKey[(i/4*16)+(i%4) + 0] = RoundKey[((i-4)/4*16)+((i-4)%4) + 0] ^ tempa[0];
+        RoundKey[(i/4*16)+(i%4) + 4] = RoundKey[((i-4)/4*16)+((i-4)%4) + 4] ^ tempa[1];
+        RoundKey[(i/4*16)+(i%4) + 8] = RoundKey[((i-4)/4*16)+((i-4)%4) + 8] ^ tempa[2];
+        RoundKey[(i/4*16)+(i%4) + 12] = RoundKey[((i-4)/4*16)+((i-4)%4) + 12] ^ tempa[3];
     }
-    if (i % Nk == 0)
-    {
-      // This function rotates the 4 bytes in a word to the left once.
-      // [a0,a1,a2,a3] becomes [a1,a2,a3,a0]
-
-      // Function RotWord()
-      {
-        k = tempa[0];
-        tempa[0] = tempa[1];
-        tempa[1] = tempa[2];
-        tempa[2] = tempa[3];
-        tempa[3] = k;
-      }
-
-      // SubWord() is a function that takes a four-byte input word and 
-      // applies the S-box to each of the four bytes to produce an output word.
-
-      // Function Subword()
-      {
-        tempa[0] = getSBoxValue(tempa[0]);
-        tempa[1] = getSBoxValue(tempa[1]);
-        tempa[2] = getSBoxValue(tempa[2]);
-        tempa[3] = getSBoxValue(tempa[3]);
-      }
-
-      tempa[0] =  tempa[0] ^ Rcon[i/Nk];
-    }
-    else if (Nk > 6 && i % Nk == 4)
-    {
-      // Function Subword()
-      {
-        tempa[0] = getSBoxValue(tempa[0]);
-        tempa[1] = getSBoxValue(tempa[1]);
-        tempa[2] = getSBoxValue(tempa[2]);
-        tempa[3] = getSBoxValue(tempa[3]);
-      }
-    }
-    RoundKey[i * 4 + 0] = RoundKey[(i - Nk) * 4 + 0] ^ tempa[0];
-    RoundKey[i * 4 + 1] = RoundKey[(i - Nk) * 4 + 1] ^ tempa[1];
-    RoundKey[i * 4 + 2] = RoundKey[(i - Nk) * 4 + 2] ^ tempa[2];
-    RoundKey[i * 4 + 3] = RoundKey[(i - Nk) * 4 + 3] ^ tempa[3];
-  }
 }
 
 // This function adds the round key to state.
@@ -227,7 +205,7 @@ static void AddRoundKey(uint8_t round)
   {
     for(j = 0; j < 4; ++j)
     {
-      (*state)[i][j] ^= RoundKey[round * Nb * 4 + i * Nb + j];
+      (*state)[j][i] ^= RoundKey[round * 16 + j * Nb + i];
     }
   }
 }
@@ -236,14 +214,14 @@ static void AddRoundKey(uint8_t round)
 // state matrix with values in an S-box.
 static void SubBytes(void)
 {
-  uint8_t i, j;
-  for(i = 0; i < 4; ++i)
-  {
-    for(j = 0; j < 4; ++j)
-    {
-      (*state)[j][i] = getSBoxValue((*state)[j][i]);
+    uint8_t i, j;
+
+    for(i = 0; i < 4; ++i) {
+        for(j = 0; j < 4; ++j) {
+            (*state)[j][i] = getSBoxValue((*state)[j][i]);
+        }
     }
-  }
+
 }
 
 // The ShiftRows() function shifts the rows in the state to the left.
@@ -253,28 +231,28 @@ static void ShiftRows(void)
 {
   uint8_t temp;
 
-  // Rotate first row 1 columns to left  
-  temp           = (*state)[0][1];
-  (*state)[0][1] = (*state)[1][1];
-  (*state)[1][1] = (*state)[2][1];
-  (*state)[2][1] = (*state)[3][1];
-  (*state)[3][1] = temp;
+  // Rotate first row 1 columns to left
+  temp           = (*state)[1][0];
+  (*state)[1][0] = (*state)[1][1];
+  (*state)[1][1] = (*state)[1][2];
+  (*state)[1][2] = (*state)[1][3];
+  (*state)[1][3] = temp;
 
-  // Rotate second row 2 columns to left  
-  temp           = (*state)[0][2];
-  (*state)[0][2] = (*state)[2][2];
+//   Rotate second row 2 columns to left
+  temp           = (*state)[2][0];
+  (*state)[2][0] = (*state)[2][2];
   (*state)[2][2] = temp;
 
-  temp       = (*state)[1][2];
-  (*state)[1][2] = (*state)[3][2];
-  (*state)[3][2] = temp;
+  temp       = (*state)[2][1];
+  (*state)[2][1] = (*state)[2][3];
+  (*state)[2][3] = temp;
 
   // Rotate third row 3 columns to left
-  temp       = (*state)[0][3];
-  (*state)[0][3] = (*state)[3][3];
-  (*state)[3][3] = (*state)[2][3];
-  (*state)[2][3] = (*state)[1][3];
-  (*state)[1][3] = temp;
+  temp       = (*state)[3][0];
+  (*state)[3][0] = (*state)[3][3];
+  (*state)[3][3] = (*state)[3][2];
+  (*state)[3][2] = (*state)[3][1];
+  (*state)[3][1] = temp;
 }
 
 static uint8_t xtime(uint8_t x)
@@ -282,20 +260,52 @@ static uint8_t xtime(uint8_t x)
   return ((x<<1) ^ (((x>>7) & 1) * 0x1b));
 }
 
+static uint8_t x2time(uint8_t x)
+{
+    return ((x<<1) ^ (((x>>7) & 1) * 0x1B));
+}
+
+static uint8_t x3time(uint8_t x)
+{
+    return x2time(x) ^ x;
+}
+
+static uint8_t x9time(uint8_t x)
+{
+    return x2time(x2time(x2time(x))) ^ x;
+}
+
+static uint8_t x11time(uint8_t x)
+{
+    return x2time(x2time(x2time(x)) ^ x) ^ x;
+}
+
+static uint8_t x13time(uint8_t x)
+{
+    return x2time(x2time(x3time(x))) ^ x;
+}
+
+static uint8_t x14time(uint8_t x)
+{
+    return x2time(x2time(x3time(x)) ^ x);
+}
+
 // MixColumns function mixes the columns of the state matrix
 static void MixColumns(void)
 {
-  uint8_t i;
-  uint8_t Tmp,Tm,t;
-  for(i = 0; i < 4; ++i)
-  {  
-    t   = (*state)[i][0];
-    Tmp = (*state)[i][0] ^ (*state)[i][1] ^ (*state)[i][2] ^ (*state)[i][3] ;
-    Tm  = (*state)[i][0] ^ (*state)[i][1] ; Tm = xtime(Tm);  (*state)[i][0] ^= Tm ^ Tmp ;
-    Tm  = (*state)[i][1] ^ (*state)[i][2] ; Tm = xtime(Tm);  (*state)[i][1] ^= Tm ^ Tmp ;
-    Tm  = (*state)[i][2] ^ (*state)[i][3] ; Tm = xtime(Tm);  (*state)[i][2] ^= Tm ^ Tmp ;
-    Tm  = (*state)[i][3] ^ t ;        Tm = xtime(Tm);  (*state)[i][3] ^= Tm ^ Tmp ;
-  }
+    uint8_t i;
+    uint8_t tmp[4];
+    for (i = 0; i < 4; i++) {
+        tmp[0] = x2time((*state)[0][i]) ^ x3time((*state)[1][i]) ^ (*state)[2][i] ^ (*state)[3][i];
+        tmp[1] = (*state)[0][i] ^ x2time((*state)[1][i]) ^ x3time((*state)[2][i]) ^ (*state)[3][i];
+        tmp[2] = (*state)[0][i] ^ (*state)[1][i] ^ x2time((*state)[2][i]) ^ x3time((*state)[3][i]);
+        tmp[3] = x3time((*state)[0][i]) ^ (*state)[1][i] ^ (*state)[2][i] ^ x2time((*state)[3][i]);
+
+        (*state)[0][i] = tmp[0];
+        (*state)[1][i] = tmp[1];
+        (*state)[2][i] = tmp[2];
+        (*state)[3][i] = tmp[3];
+    }
 }
 
 // Multiply is used to multiply numbers in the field GF(2^8)
@@ -323,20 +333,19 @@ static uint8_t Multiply(uint8_t x, uint8_t y)
 // Please use the references to gain more information.
 static void InvMixColumns(void)
 {
-  int i;
-  uint8_t a,b,c,d;
-  for(i=0;i<4;++i)
-  { 
-    a = (*state)[i][0];
-    b = (*state)[i][1];
-    c = (*state)[i][2];
-    d = (*state)[i][3];
+    uint8_t i;
+    uint8_t tmp[4];
+    for (i = 0; i < 4; i++) {
+        tmp[0] = x14time((*state)[0][i]) ^ x11time((*state)[1][i]) ^ x13time((*state)[2][i]) ^ x9time((*state)[3][i]);
+        tmp[1] = x9time((*state)[0][i]) ^ x14time((*state)[1][i]) ^ x11time((*state)[2][i]) ^ x13time((*state)[3][i]);
+        tmp[2] = x13time((*state)[0][i]) ^ x9time((*state)[1][i]) ^ x14time((*state)[2][i]) ^ x11time((*state)[3][i]);
+        tmp[3] = x11time((*state)[0][i]) ^ x13time((*state)[1][i]) ^ x9time((*state)[2][i]) ^ x14time((*state)[3][i]);
 
-    (*state)[i][0] = Multiply(a, 0x0e) ^ Multiply(b, 0x0b) ^ Multiply(c, 0x0d) ^ Multiply(d, 0x09);
-    (*state)[i][1] = Multiply(a, 0x09) ^ Multiply(b, 0x0e) ^ Multiply(c, 0x0b) ^ Multiply(d, 0x0d);
-    (*state)[i][2] = Multiply(a, 0x0d) ^ Multiply(b, 0x09) ^ Multiply(c, 0x0e) ^ Multiply(d, 0x0b);
-    (*state)[i][3] = Multiply(a, 0x0b) ^ Multiply(b, 0x0d) ^ Multiply(c, 0x09) ^ Multiply(d, 0x0e);
-  }
+        (*state)[0][i] = tmp[0];
+        (*state)[1][i] = tmp[1];
+        (*state)[2][i] = tmp[2];
+        (*state)[3][i] = tmp[3];
+    }
 }
 
 
@@ -358,8 +367,30 @@ static void InvShiftRows(void)
 {
   uint8_t temp;
 
+	temp=(*state)[1][3];
+  (*state)[1][3]=(*state)[1][2];
+  (*state)[1][2]=(*state)[1][1];
+  (*state)[1][1]=(*state)[1][0];
+  (*state)[1][0]=temp;
+
+  // Rotate second row 2 columns to right 
+  temp=(*state)[2][0];
+  (*state)[2][0]=(*state)[2][2];
+  (*state)[2][2]=temp;
+
+  temp=(*state)[2][1];
+  (*state)[2][1]=(*state)[2][3];
+  (*state)[2][3]=temp;
+
+  // Rotate third row 3 columns to right
+  temp=(*state)[3][0];
+  (*state)[3][0]=(*state)[3][1];
+  (*state)[3][1]=(*state)[3][2];
+  (*state)[3][2]=(*state)[3][3];
+  (*state)[3][3]=temp;
+  
   // Rotate first row 1 columns to right  
-  temp=(*state)[3][1];
+/*  temp=(*state)[3][1];
   (*state)[3][1]=(*state)[2][1];
   (*state)[2][1]=(*state)[1][1];
   (*state)[1][1]=(*state)[0][1];
@@ -379,7 +410,7 @@ static void InvShiftRows(void)
   (*state)[0][3]=(*state)[1][3];
   (*state)[1][3]=(*state)[2][3];
   (*state)[2][3]=(*state)[3][3];
-  (*state)[3][3]=temp;
+  (*state)[3][3]=temp;*/
 }
 
 
@@ -498,7 +529,7 @@ static void XorWithIv(uint8_t* buf)
 
 void AES128_CBC_encrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length, const uint8_t* key, const uint8_t* iv)
 {
-  intptr_t i;
+  uint32_t i;
   uint8_t remainders = length % KEYLEN; /* Remaining bytes in the last non-full block */
 
   BlockCopy(output, input);
@@ -513,7 +544,7 @@ void AES128_CBC_encrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length,
 
   if(iv != 0)
   {
-    Iv = (uint8_t*)iv;
+    BlockCopy(Iv, (uint8_t *)iv);
   }
 
   for(i = 0; i < length; i += KEYLEN)
@@ -522,7 +553,7 @@ void AES128_CBC_encrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length,
     BlockCopy(output, input);
     state = (state_t*)output;
     Cipher();
-    Iv = output;
+    BlockCopy(Iv, output);
     input += KEYLEN;
     output += KEYLEN;
   }
@@ -538,7 +569,7 @@ void AES128_CBC_encrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length,
 
 void AES128_CBC_decrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length, const uint8_t* key, const uint8_t* iv)
 {
-  intptr_t i;
+  uint32_t i;
   uint8_t remainders = length % KEYLEN; /* Remaining bytes in the last non-full block */
   
   BlockCopy(output, input);
@@ -554,7 +585,7 @@ void AES128_CBC_decrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length,
   // If iv is passed as 0, we continue to encrypt without re-setting the Iv
   if(iv != 0)
   {
-    Iv = (uint8_t*)iv;
+    BlockCopy(Iv, (uint8_t *)iv);
   }
 
   for(i = 0; i < length; i += KEYLEN)
@@ -563,7 +594,7 @@ void AES128_CBC_decrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length,
     state = (state_t*)output;
     InvCipher();
     XorWithIv(output);
-    Iv = input;
+    BlockCopy(Iv, input);
     input += KEYLEN;
     output += KEYLEN;
   }
